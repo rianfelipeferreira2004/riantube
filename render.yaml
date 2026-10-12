@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: yt-scraper-api
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    plan: free
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20.18.0
+      - key: YT_LANG
+        value: pt
+      - key: YT_LOCATION
+        value: BR
+      - key: CACHE_TTL_SECONDS
+        value: 300
