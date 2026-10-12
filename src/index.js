@@ -198,43 +198,126 @@ function decodeHTMLEntities(s) {
     .replace(/&nbsp;/g, ' ');
 }
 
+// Busca info do vídeo com fallbacks.
+// getBasicInfo chama só o endpoint /player (o /next é bloqueado em IPs de
+// datacenter com 403). Se falhar, tenta client ANDROID e depois getInfo full.
+async function getVideoInfoWithFallback(videoId) {
+  const attempts = [
+    ['WEB', 'basic'],
+    ['ANDROID', 'basic'],
+    ['WEB', 'full'],
+    ['ANDROID', 'full'],
+  ];
+  let lastErr = null;
+  for (const [client, mode] of attempts) {
+    try {
+      const yt = await getInnertube(client);
+      const info =
+        mode === 'basic'
+          ? await yt.getBasicInfo(videoId)
+          : await yt.getInfo(videoId);
+      if (info?.basic_info?.title || info?.basic_info?.video_id) return info;
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('Falha ao obter info do vídeo');
+}
+
+function toSegments(list, langUsed) {
+  return {
+    segments: list.map((s) => ({
+      text: decodeHTMLEntities(s.text),
+      start: s.offset,
+      end: s.offset + s.duration,
+      start_ms: Math.round(s.offset * 1000),
+      end_ms: Math.round((s.offset + s.duration) * 1000),
+      lang: s.lang || langUsed,
+    })),
+    lang_used: list[0]?.lang || langUsed,
+  };
+}
+
+// Baixa legendas direto do timedtext (caption_tracks do player) e interpreta
+// json3, srv3/xml ou vtt. Retorna null se nada funcionar.
+async function fetchTimedtextSegments(tracks, lang = 'pt') {
+  if (!tracks?.length) return null;
+  const order = [lang, lang.split('-')[0], 'pt', 'pt-BR', 'en', 'en-US'];
+  const ranked = [...tracks].sort((a, b) => {
+    const ia = order.findIndex((l) => (a.language_code || '').toLowerCase().startsWith(l.toLowerCase()));
+    const ib = order.findIndex((l) => (b.language_code || '').toLowerCase().startsWith(l.toLowerCase()));
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
+  for (const track of ranked.slice(0, 4)) {
+    for (const fmt of ['json3', 'srv3']) {
+      try {
+        const url = track.base_url + (track.base_url.includes('?') ? '&' : '?') + `fmt=${fmt}`;
+        const r = await fetch(url, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36' },
+        });
+        if (!r.ok) continue;
+        const body = await r.text();
+        if (!body || body.length < 20) continue;
+        const parsed = fmt === 'json3' ? parseJson3(body, track.language_code) : parseSrv3(body, track.language_code);
+        if (parsed?.length) return { segments: parsed, lang_used: track.language_code };
+      } catch { /* tenta próximo */ }
+    }
+  }
+  return null;
+}
+
+function parseJson3(body, lang) {
+  try {
+    const data = JSON.parse(body);
+    const out = [];
+    for (const ev of data.events || []) {
+      if (!ev.segs) continue;
+      const text = decodeHTMLEntities(ev.segs.map((s) => s.utf8 || '').join('')).replace(/\n/g, ' ').trim();
+      if (!text) continue;
+      const start = (ev.tStartMs || 0) / 1000;
+      const end = ((ev.tStartMs || 0) + (ev.dDurMs || 0)) / 1000;
+      out.push({ text, offset: start, duration: Math.max(0.1, end - start), lang });
+    }
+    return out;
+  } catch { return []; }
+}
+
+function parseSrv3(body, lang) {
+  try {
+    const out = [];
+    const re = /<(?:text|p)[^>]*(?:start|t)="([\d.]+)"[^>]*(?:dur|d)="([\d.]+)"[^>]*>([\s\S]*?)<\/(?:text|p)>/g;
+    let m;
+    while ((m = re.exec(body)) !== null) {
+      let start = parseFloat(m[1]);
+      let dur = parseFloat(m[2]);
+      // formato <p t="ms" d="ms"> usa milissegundos
+      if (/<p[\s>]/.test(m[0].slice(0, 3))) { start /= 1000; dur /= 1000; }
+      const text = decodeHTMLEntities(m[3].replace(/<[^>]+>/g, '')).replace(/\n/g, ' ').trim();
+      if (!text) continue;
+      out.push({ text, offset: start, duration: Math.max(0.1, dur), lang });
+    }
+    return out;
+  } catch { return []; }
+}
+
 async function fetchTranscriptSegments(videoId, lang = 'pt') {
   const langsToTry = [lang, lang.split('-')[0], 'pt', 'en'];
   let lastErr = null;
   for (const l of [...new Set(langsToTry)]) {
     try {
       const segs = await fetchTranscript(videoId, { lang: l });
-      if (segs && segs.length) {
-        return {
-          segments: segs.map((s) => ({
-            text: decodeHTMLEntities(s.text),
-            start: s.offset,
-            end: s.offset + s.duration,
-            start_ms: Math.round(s.offset * 1000),
-            end_ms: Math.round((s.offset + s.duration) * 1000),
-            lang: s.lang,
-          })),
-          lang_used: segs[0]?.lang || l,
-        };
-      }
+      if (segs && segs.length) return toSegments(segs, l);
     } catch (e) { lastErr = e; }
   }
   // Fallback: sem lang (deixa a lib escolher)
   try {
     const segs = await fetchTranscript(videoId);
-    if (segs && segs.length) {
-      return {
-        segments: segs.map((s) => ({
-          text: decodeHTMLEntities(s.text),
-          start: s.offset,
-          end: s.offset + s.duration,
-          start_ms: Math.round(s.offset * 1000),
-          end_ms: Math.round((s.offset + s.duration) * 1000),
-          lang: s.lang,
-        })),
-        lang_used: segs[0]?.lang || 'auto',
-      };
-    }
+    if (segs && segs.length) return toSegments(segs, 'auto');
+  } catch (e) { lastErr = e; }
+  // Fallback final: legendas via InnerTube (player captions + timedtext)
+  try {
+    const info = await getVideoInfoWithFallback(videoId);
+    const tracks = info.captions?.caption_tracks || [];
+    const timed = await fetchTimedtextSegments(tracks, lang);
+    if (timed) return timed;
   } catch (e) { lastErr = e; }
   throw lastErr || new Error('Sem transcrição');
 }
@@ -306,8 +389,7 @@ app.get('/api/video/:id', async (req, res) => {
   if (hit) return ok(res, hit, true);
 
   try {
-    const innertube = await getInnertube();
-    const info = await innertube.getInfo(id);
+    const info = await getVideoInfoWithFallback(id);
     const b = info.basic_info || {};
     const p = info.primary_info || {};
 
@@ -457,13 +539,12 @@ app.post('/api/bulk/videos', async (req, res) => {
   if (ids.length > 20) return fail(res, 400, 'Máximo de 20 IDs por requisição.');
 
   try {
-    const innertube = await getInnertube();
     const results = [];
     for (const raw of ids) {
       const id = extractVideoId(raw);
       if (!id) { results.push({ input: raw, error: 'ID inválido' }); continue; }
       try {
-        const info = await innertube.getInfo(id);
+        const info = await getVideoInfoWithFallback(id);
         const b = info.basic_info || {};
         results.push({
           video_id: id,
