@@ -239,7 +239,7 @@ function extractVideoId(input) {
   return m ? m[1] : null;
 }
 
-module.exports = {
+export {
   cacheGet,
   cacheSet,
   parseViews,

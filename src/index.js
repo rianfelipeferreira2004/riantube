@@ -1,9 +1,10 @@
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const rateLimit = require('express-rate-limit');
-const { getInnertube } = require('./ytClient');
-const {
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import rateLimit from 'express-rate-limit';
+import { fetchTranscript } from 'youtube-transcript-plus';
+import { getInnertube } from './ytClient.js';
+import {
   cacheGet,
   cacheSet,
   normalizeVideo,
@@ -11,7 +12,7 @@ const {
   median,
   mean,
   videoUrl,
-} = require('./utils');
+} from './utils.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -198,7 +199,6 @@ function decodeHTMLEntities(s) {
 }
 
 async function fetchTranscriptSegments(videoId, lang = 'pt') {
-  const { fetchTranscript } = require('youtube-transcript-plus');
   const langsToTry = [lang, lang.split('-')[0], 'pt', 'en'];
   let lastErr = null;
   for (const l of [...new Set(langsToTry)]) {
