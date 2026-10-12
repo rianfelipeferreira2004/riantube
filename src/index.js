@@ -348,17 +348,33 @@ function parseSrv3(body, lang) {
 }
 
 async function fetchTranscriptSegments(videoId, lang = 'pt') {
+  // Se YT_COOKIE configurado, injeta nos requests da lib (desbloqueia IP datacenter)
+  const extraConfig = process.env.YT_COOKIE
+    ? (() => {
+        const authedFetch = ({ url, method = 'GET', body, headers }) =>
+          fetch(url, {
+            method,
+            body,
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36',
+              ...(headers || {}),
+              Cookie: process.env.YT_COOKIE,
+            },
+          });
+        return { videoFetch: authedFetch, playerFetch: authedFetch, transcriptFetch: authedFetch };
+      })()
+    : {};
   const langsToTry = [lang, lang.split('-')[0], 'pt', 'en'];
   let lastErr = null;
   for (const l of [...new Set(langsToTry)]) {
     try {
-      const segs = await fetchTranscript(videoId, { lang: l });
+      const segs = await fetchTranscript(videoId, { lang: l, ...extraConfig });
       if (segs && segs.length) return toSegments(segs, l);
     } catch (e) { lastErr = e; }
   }
   // Fallback: sem lang (deixa a lib escolher)
   try {
-    const segs = await fetchTranscript(videoId);
+    const segs = await fetchTranscript(videoId, extraConfig);
     if (segs && segs.length) return toSegments(segs, 'auto');
   } catch (e) { lastErr = e; }
   // Fallback final: legendas via InnerTube (player captions + timedtext)
