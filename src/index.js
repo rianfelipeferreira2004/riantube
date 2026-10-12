@@ -630,6 +630,22 @@ app.post('/api/bulk/videos', async (req, res) => {
           url: videoUrl(id),
         });
       } catch (e) {
+        try {
+          const partial = await getVideoInfoPartial(id);
+          if (partial) {
+            results.push({
+              video_id: id,
+              title: partial.title,
+              channel: partial.channel,
+              channel_id: partial.channel_id,
+              views: partial.views,
+              duration_seconds: partial.duration_seconds,
+              url: videoUrl(id),
+              partial: true,
+            });
+            continue;
+          }
+        } catch { /* ignora */ }
         results.push({ input: raw, video_id: id, error: e.message });
       }
     }
