@@ -109,6 +109,17 @@ cp .env.example .env
 - Rate limit padrão: 60 req/min.
 - Cache em memória com header `X-Cache: HIT/MISS`.
 
+## 🔑 YT_COOKIE (importante no Render)
+
+O YouTube bloqueia os endpoints de **player/transcrição** (`/api/video`, `/transcript`) para IPs de datacenter (erro 403). Com cookie, tudo funciona:
+
+1. No seu navegador logado no YouTube, abra DevTools (F12) → Application → Cookies → `youtube.com`.
+2. Copie os valores de `VISITOR_INFO1_LIVE`, `PREF`, `SID`, `HSID`, `SSID`, `APISID`, `SAPISID`, `LOGIN_INFO`, `__Secure-...` e monte:
+   `VISITOR_INFO1_LIVE=...; PREF=...; SID=...; ...`
+   (Ou use a extensão "Get cookies.txt" e converta para o formato `nome=valor;`.)
+3. No Render → seu Web Service → **Environment** → adicione `YT_COOKIE` com esse valor → **Save** (redeploy automático).
+4. Sem cookie: `/api/video` retorna dados **parciais** (`partial: true`, views aproximadas via busca) e `/transcript` pode retornar 404.
+
 ## ⚠️ Avisos
 
 - Projeto educacional. Respeite os [Termos do YouTube](https://www.youtube.com/t/terms).

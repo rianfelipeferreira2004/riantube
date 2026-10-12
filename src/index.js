@@ -198,6 +198,55 @@ function decodeHTMLEntities(s) {
     .replace(/&nbsp;/g, ' ');
 }
 
+// Fallback quando o /player é bloqueado (403 em IP de datacenter):
+// busca o vídeo pelo próprio ID (search funciona) + oEmbed (título/autor exatos).
+// Retorna dados parciais com partial: true e data_source indicando a precisão.
+async function getVideoInfoPartial(videoId) {
+  let fromSearch = null;
+  try {
+    const yt = await getInnertube();
+    const videos = await searchVideos(yt, videoId, 5);
+    fromSearch = videos.find((v) => v.video_id === videoId) || null;
+  } catch { /* ignora */ }
+
+  let fromOembed = null;
+  try {
+    const r = await fetch(
+      `https://www.youtube.com/oembed?url=${encodeURIComponent(videoUrl(videoId))}&format=json`,
+      { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } }
+    );
+    if (r.ok) fromOembed = await r.json();
+  } catch { /* ignora */ }
+
+  if (!fromSearch && !fromOembed) return null;
+  return {
+    video_id: videoId,
+    title: fromOembed?.title || fromSearch?.title || '',
+    description: '',
+    channel: fromOembed?.author_name || fromSearch?.channel || null,
+    channel_id: fromSearch?.channel_id || null,
+    views: fromSearch?.views || 0,
+    likes: null,
+    comment_count: null,
+    duration_seconds: fromSearch?.duration_seconds || 0,
+    duration_text: fromSearch?.duration_text || null,
+    published_text: fromSearch?.published_text || null,
+    is_short: !!fromSearch?.is_short,
+    is_live: false,
+    thumbnail: fromOembed?.thumbnail_url || fromSearch?.thumbnail || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    url: videoUrl(videoId),
+    shorts_url: `https://www.youtube.com/shorts/${videoId}`,
+    embed_url: `https://www.youtube.com/embed/${videoId}`,
+    keywords: [],
+    category: null,
+    captions_available: false,
+    caption_languages: [],
+    partial: true,
+    data_source: fromSearch ? 'search' : 'oembed',
+    note: 'IP do servidor bloqueado pelo YouTube (403 no player). Configure YT_COOKIE no Render para dados completos.',
+  };
+}
+
 // Busca info do vídeo com fallbacks.
 // getBasicInfo chama só o endpoint /player (o /next é bloqueado em IPs de
 // datacenter com 403). Se falhar, tenta client ANDROID e depois getInfo full.
@@ -426,6 +475,15 @@ app.get('/api/video/:id', async (req, res) => {
     return ok(res, payload);
   } catch (e) {
     console.error(e);
+    // Último recurso: dados parciais (search + oEmbed) em vez de 502
+    try {
+      const partial = await getVideoInfoPartial(id);
+      if (partial) {
+        const payload = { video: partial, partial: true };
+        cacheSet(cacheKey, payload, 300);
+        return ok(res, payload);
+      }
+    } catch { /* ignora */ }
     return fail(res, 502, 'Não foi possível obter o vídeo. Verifique o ID.', { detail: e.message });
   }
 });
@@ -456,7 +514,7 @@ app.get('/api/video/:id/transcript', async (req, res) => {
     return ok(res, payload);
   } catch (e) {
     console.error(e);
-    return fail(res, 404, 'Este vídeo não possui transcrição/legendas disponíveis.', { video_id: id });
+    return fail(res, 404, 'Transcrição indisponível: vídeo sem legendas ou IP do servidor bloqueado pelo YouTube. Configure YT_COOKIE no Render para desbloquear.', { video_id: id });
   }
 });
 
